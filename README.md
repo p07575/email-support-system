@@ -1,83 +1,101 @@
 # Email Support System
 
-An automated email support system that routes customer emails to Telegram and processes responses with AI.
+A Python-based email support system that integrates with Telegram and uses Ollama for AI-powered response processing.
 
 ## Features
 
-- Automatically checks for new support emails
-- Sends acknowledgment emails to customers
-- Forwards emails to a Telegram chat for support agents
-- Uses Ollama for AI-enhanced response generation
-- Formats emails properly for professional communication
+- Email monitoring and processing
+- Telegram bot integration for support team communication
+- AI-powered response processing using Ollama
+- Automatic ticket creation and management
+- HTML email support
+- Robust error handling and recovery
 
-## Requirements
+## Project Structure
 
-- Python 3.8+
-- Email account with SMTP/IMAP access
-- Telegram Bot Token
-- Ollama server running with desired model
+```
+email-support-system/
+├── src/
+│   ├── config/
+│   │   └── settings.py         # Configuration and environment variables
+│   ├── models/
+│   │   └── ticket.py          # Ticket model and queue management
+│   ├── services/
+│   │   ├── email_service.py   # Email handling (SMTP/IMAP)
+│   │   ├── ollama_service.py  # Ollama AI integration
+│   │   └── telegram_service.py # Telegram bot functionality
+│   ├── handlers/
+│   │   └── telegram_handlers.py # Telegram command handlers
+│   └── main.py                # Main application entry point
+├── .env                       # Environment variables
+├── requirements.txt           # Python dependencies
+└── README.md                 # This file
+```
 
-## Installation
+## Setup
 
-1. Clone this repository
+1. Clone the repository
 2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Create a `.env` file with the following variables:
+   ```
+   # Email Server Settings
+   SMTP_SERVER=your_smtp_server
+   SMTP_PORT=587
+   SMTP_USERNAME=your_email
+   SMTP_PASSWORD=your_password
+   IMAP_SERVER=your_imap_server
+   IMAP_PORT=993
+   IMAP_USERNAME=your_email
+   IMAP_PASSWORD=your_password
 
-```bash
-pip install -r requirements.txt
-```
+   # Telegram Settings
+   TELEGRAM_BOT_TOKEN=your_bot_token
+   TELEGRAM_SUPPORT_CHAT_ID=your_chat_id
 
-3. Set up your `.env` file with credentials:
-
-```
-# Email Server Settings
-SMTP_SERVER=your.smtp.server
-SMTP_PORT=587
-SMTP_USERNAME=your@email.com
-SMTP_PASSWORD=your_password
-IMAP_SERVER=your.imap.server
-IMAP_PORT=993
-IMAP_USERNAME=your@email.com
-IMAP_PASSWORD=your_password
-
-# Telegram Settings
-TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_SUPPORT_CHAT_ID=your_chat_id
-
-# Ollama Settings
-OLLAMA_HOST=http://your.ollama.server:11434
-OLLAMA_MODEL=your/model:tag
-```
+   # Ollama Settings
+   OLLAMA_HOST=http://localhost:11434
+   OLLAMA_MODEL=your_model_name
+   ```
 
 ## Usage
 
-1. Start the system:
-
-```bash
-python main.py
-```
+1. Start the application:
+   ```bash
+   python src/main.py
+   ```
 
 2. The system will:
-   - Check for new emails every minute
-   - Send acknowledgments to customers
-   - Forward emails to your Telegram support chat
+   - Monitor the configured email inbox for new messages
+   - Create tickets for new emails
+   - Forward tickets to the configured Telegram chat
+   - Process responses through Ollama before sending
 
-3. Telegram commands:
-   - `/reply ticket_id your_response` - Reply to a customer
+3. Available Telegram commands:
+   - `/help` - Show available commands
    - `/status` - Show current tickets in the queue
-   - `/list` - List all recent tickets
+   - `/list` - List recent tickets
    - `/ticket ticket_id` - Show details of a specific ticket
-   - `/help` - Show help message
+   - `/reply ticket_id your_response` - Reply to a ticket
 
-## How It Works
+## Error Handling
 
-1. Email Monitoring: Continuously monitors the specified email account for new messages
-2. Ticket Creation: Each email is assigned a unique ticket ID
-3. Telegram Notification: Support agents are notified via Telegram
-4. AI Response Processing: Agent responses are improved by Ollama AI
-5. Customer Communication: Formatted responses are sent to the customer
+The system includes comprehensive error handling for:
+- Email server connection issues
+- Telegram API errors
+- Ollama processing failures
+- Message formatting problems
 
-## Troubleshooting
+## Contributing
 
-- **Ollama Connection Issues**: Ensure your Ollama server is running and accessible
-- **Telegram Bot Errors**: Make sure your bot token is correct and the bot is added to the chat
-- **Email Authentication Failures**: Verify your email credentials and server settings 
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details. 

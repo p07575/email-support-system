@@ -60,36 +60,56 @@ def sanitize_telegram_markdown(text):
     if not text:
         return ""
         
-    # For safety, convert to plain text by removing all markdown entirely
-    # This is the most reliable way to avoid parsing errors
-    # Preserve dots in email addresses by first replacing them with a placeholder
+    # Convert to string and make a copy for safety
     text = str(text)
-    text = re.sub(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', lambda m: m.group(1).replace('.', '[DOT]'), text)
     
-    # Now remove other special characters
-    plain_text = re.sub(r'[*_`~>#+=|{}.\[\]]', '', text)
+    # Replace DOT with . in case it's already been converted somewhere
+    text = text.replace("DOT", ".")
     
-    # Remove URLs that might cause issues
-    plain_text = re.sub(r'https?://\S+', '[link]', plain_text)
+    # Now remove other special characters except email addresses
+    # We'll specially handle emails by preserving them exactly as they are
+    
+    # First extract and protect all email addresses with unique placeholders
+    cleaned_text = ""
+    i = 0
+    while i < len(text):
+        # Check if this might be the start of an email
+        if i < len(text) - 5 and '@' in text[i:i+20]:
+            # Look for email ending (space, newline, or end of string)
+            j = i
+            while j < len(text) and text[j] not in [' ', '\n', '\r']:
+                j += 1
+            
+            potential_email = text[i:j]
+            # Simple email validation
+            if '@' in potential_email and '.' in potential_email.split('@')[1]:
+                # This looks like an email, preserve it entirely
+                cleaned_text += potential_email
+                i = j
+                continue
+        
+        # Not an email, process char by char
+        if text[i] not in '*_`~>#+=|{}[]\n\r':
+            cleaned_text += text[i]
+        elif text[i] in ['\n', '\r']:
+            cleaned_text += text[i]  # Preserve newlines
+        i += 1
     
     # Replace any non-ASCII characters that might cause issues
-    plain_text = re.sub(r'[^\x00-\x7F]+', ' ', plain_text)
+    cleaned_text = ''.join(c for c in cleaned_text if ord(c) < 128)
     
     # Ensure no more than 2 consecutive newlines
-    plain_text = re.sub(r'\n{3,}', '\n\n', plain_text)
+    cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
     
     # Remove excessive spaces
-    plain_text = re.sub(r'\s{3,}', '  ', plain_text)
-    
-    # Restore dots in email addresses
-    plain_text = plain_text.replace('[DOT]', '.')
+    cleaned_text = re.sub(r'\s{3,}', '  ', cleaned_text)
     
     # Limit text length
-    max_length = 2000  # Even more conservative limit
-    if len(plain_text) > max_length:
-        plain_text = plain_text[:max_length] + "..."
+    max_length = 2000  # Conservative limit
+    if len(cleaned_text) > max_length:
+        cleaned_text = cleaned_text[:max_length] + "..."
         
-    return plain_text
+    return cleaned_text
 
 def safe_telegram_send(chat_id, message, parse_mode=None, retry=True):
     """
@@ -461,7 +481,7 @@ def initialize_telegram():
             data = ticket_queue[ticket_id]
             
             # Format received time
-            received_time = data.get('received_at', 'Unknown')
+            received_time = data["received_at"]
             try:
                 dt = datetime.fromisoformat(received_time)
                 received_time = dt.strftime("%Y-%m-%d %H:%M")
@@ -469,12 +489,12 @@ def initialize_telegram():
                 pass
             
             # Use plain text version if available
-            message_preview = data.get('plain_message', data['message'])
+            message_preview = data.get("plain_message", data["message"])
             message_preview = message_preview[:500] + "..." if len(message_preview) > 500 else message_preview
             
             # Sanitize all fields for Telegram
-            safe_email = sanitize_telegram_markdown(data['from_email'])
-            safe_subject = sanitize_telegram_markdown(data['subject'])
+            safe_email = sanitize_telegram_markdown(data["from_email"])
+            safe_subject = sanitize_telegram_markdown(data["subject"])
             safe_message = sanitize_telegram_markdown(message_preview)
             
             # Format the message text with formatting
@@ -487,24 +507,24 @@ def initialize_telegram():
                 f"Message:\n{safe_message}\n\n"
             )
             
-            if data.get('response'):
+            if "response" in data and data["response"]:
                 # Format response time
-                response_time = data.get('response_time', 'Unknown')
+                response_time = data.get("response_time", "Unknown")
                 try:
                     dt = datetime.fromisoformat(response_time)
                     response_time = dt.strftime("%Y-%m-%d %H:%M")
                 except:
                     pass
                     
-                safe_response = sanitize_telegram_markdown(data['response'][:500] + "...")
+                safe_response = sanitize_telegram_markdown(data["response"][:500] + "...")
                 ticket_text += (
                     f"Response:\n"
                     f"{safe_response}\n\n"
                     f"Response Time: {response_time}\n"
                 )
                 
-            # Add reply button/instructions
-            ticket_text += f"\nTo reply, use:\n/reply {ticket_id} Your response here"
+            # Add reply command on a separate line for easy copying
+            ticket_text += f"\nTo reply, use this command (click to copy):\n/reply {ticket_id}"
                 
             safe_telegram_send(message.chat.id, ticket_text)
             
@@ -566,6 +586,7 @@ def telegram_polling_loop():
                 pass
 
 def forward_to_telegram(ticket_id, from_email, subject, message):
+    """Forward a new ticket to Telegram"""
     global bot
     
     # Ensure the bot is initialized
@@ -580,14 +601,15 @@ def forward_to_telegram(ticket_id, from_email, subject, message):
     safe_subject = sanitize_telegram_markdown(subject)
     safe_message_preview = sanitize_telegram_markdown(message_preview)
     
+    # Make the reply command a separate line so it's easily copiable
     telegram_message = (
         f"🆕 New Support Request\n"
         f"Ticket ID: #{ticket_id}\n"
         f"From: {safe_from_email}\n"
         f"Subject: {safe_subject}\n\n"
         f"Message:\n{safe_message_preview}\n\n"
-        f"To reply, use the command:\n"
-        f"/reply {ticket_id} Your response here"
+        f"To reply, use this command (click to copy):\n"
+        f"/reply {ticket_id}"
     )
     
     try:
@@ -701,8 +723,15 @@ def process_with_deepseek(ticket_id, response_text):
         return original_with_format
 
 def send_response_email(to_email, ticket_id, response_content):
+    # Convert Markdown to HTML for emails
+    # Bold: **text** -> <strong>text</strong>
+    html_response = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', response_content)
+    
+    # Italic: *text* -> <em>text</em> (but don't match ** patterns we already handled)
+    html_response = re.sub(r'(?<!\*)\*([^\*]+)\*(?!\*)', r'<em>\1</em>', html_response)
+    
     # Convert newlines to HTML breaks for proper formatting
-    html_response = response_content.replace('\n', '<br>')
+    html_response = html_response.replace('\n', '<br>')
     
     # Convert bullet points for better formatting
     html_response = re.sub(r'- (.*?)(<br>|$)', r'• \1\2', html_response)
