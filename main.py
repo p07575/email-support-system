@@ -62,7 +62,12 @@ def sanitize_telegram_markdown(text):
         
     # For safety, convert to plain text by removing all markdown entirely
     # This is the most reliable way to avoid parsing errors
-    plain_text = re.sub(r'[*_`~>#+=|{}.\[\]]', '', str(text))
+    # Preserve dots in email addresses by first replacing them with a placeholder
+    text = str(text)
+    text = re.sub(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', lambda m: m.group(1).replace('.', '[DOT]'), text)
+    
+    # Now remove other special characters
+    plain_text = re.sub(r'[*_`~>#+=|{}.\[\]]', '', text)
     
     # Remove URLs that might cause issues
     plain_text = re.sub(r'https?://\S+', '[link]', plain_text)
@@ -75,6 +80,9 @@ def sanitize_telegram_markdown(text):
     
     # Remove excessive spaces
     plain_text = re.sub(r'\s{3,}', '  ', plain_text)
+    
+    # Restore dots in email addresses
+    plain_text = plain_text.replace('[DOT]', '.')
     
     # Limit text length
     max_length = 2000  # Even more conservative limit
