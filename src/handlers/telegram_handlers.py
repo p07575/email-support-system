@@ -65,12 +65,15 @@ def register_handlers(bot: telebot.TeleBot):
         # Get all tickets from database
         tickets = get_all_tickets()
         
-        if not tickets:
+        # Filter out tickets with status 'responded'
+        active_tickets = [ticket for ticket in tickets if ticket['status'] != 'responded']
+        
+        if not active_tickets:
             bot.reply_to(message, "No active tickets in the queue.")
             return
             
         status_text = "📋 Current Tickets:\n\n"
-        for ticket in tickets:
+        for ticket in active_tickets:
             # Sanitize all fields for Telegram
             safe_email = sanitize_telegram_markdown(ticket["from_email"])
             safe_subject = sanitize_telegram_markdown(ticket["subject"])
