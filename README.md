@@ -10,6 +10,7 @@ A Python-based email support system that integrates with Telegram and uses Ollam
 - Automatic ticket creation and management
 - HTML email support
 - Robust error handling and recovery
+- MySQL database for ticket storage
 
 ## Project Structure
 
@@ -23,11 +24,14 @@ email-support-system/
 │   ├── services/
 │   │   ├── email_service.py   # Email handling (SMTP/IMAP)
 │   │   ├── ollama_service.py  # Ollama AI integration
-│   │   └── telegram_service.py # Telegram bot functionality
+│   │   ├── telegram_service.py # Telegram bot functionality
+│   │   └── db_service.py      # MySQL database service
 │   ├── handlers/
 │   │   └── telegram_handlers.py # Telegram command handlers
 │   └── main.py                # Main application entry point
 ├── .env                       # Environment variables
+├── emailsys.sql               # Database schema
+├── setup_database.py          # Database setup script
 ├── requirements.txt           # Python dependencies
 └── README.md                 # This file
 ```
@@ -58,6 +62,13 @@ email-support-system/
    # Ollama Settings
    OLLAMA_HOST=http://localhost:11434
    OLLAMA_MODEL=your_model_name
+   
+   # MySQL Settings
+   MYSQL_HOST=localhost
+   MYSQL_PORT=3306
+   MYSQL_USER=email_support
+   MYSQL_PASSWORD=your_password
+   MYSQL_DATABASE=email_support
    ```
 
 ## MySQL Database Setup
@@ -65,27 +76,50 @@ email-support-system/
 This application uses MySQL to store ticket data. Before running the application, you need to set up the database:
 
 1. Make sure MySQL server is installed and running
-2. Update the `.env` file with your MySQL credentials:
-   ```
-   MYSQL_HOST=localhost
-   MYSQL_PORT=3306
-   MYSQL_USER=your_mysql_user
-   MYSQL_PASSWORD=your_mysql_password
-   MYSQL_DATABASE=email_support_system
-   ```
-
+2. Update the `.env` file with your MySQL credentials (see above)
 3. Run the database setup script:
    ```bash
    python setup_database.py
    ```
-
 4. The script will create the necessary database and tables automatically
+
+### MySQL Setup Example
+
+If you need to create a new MySQL user and database for this application:
+
+```sql
+-- Connect to MySQL as root
+mysql -u root -p
+
+-- Create database
+CREATE DATABASE email_support;
+
+-- Create user and grant privileges
+CREATE USER 'email_support'@'%' IDENTIFIED BY 'your_strong_password';
+GRANT ALL PRIVILEGES ON email_support.* TO 'email_support'@'%';
+FLUSH PRIVILEGES;
+
+-- Exit MySQL
+EXIT;
+```
+
+Then update your `.env` file with these credentials:
+
+```
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=email_support
+MYSQL_PASSWORD=your_strong_password
+MYSQL_DATABASE=email_support
+```
+
+For remote MySQL servers, change `MYSQL_HOST` to the server's IP address.
 
 ## Usage
 
 1. Start the application:
    ```bash
-   python src/main.py
+   python main.py
    ```
 
 2. The system will:
@@ -96,8 +130,8 @@ This application uses MySQL to store ticket data. Before running the application
 
 3. Available Telegram commands:
    - `/help` - Show available commands
-   - `/status` - Show current tickets in the queue
-   - `/list` - List recent tickets
+   - `/status` - Show current tickets in the queue (excluding responded ones)
+   - `/list` - List recent tickets with received and response times
    - `/ticket ticket_id` - Show details of a specific ticket
    - `/reply ticket_id your_response` - Reply to a ticket
 
@@ -108,6 +142,7 @@ The system includes comprehensive error handling for:
 - Telegram API errors
 - Ollama processing failures
 - Message formatting problems
+- Database connection issues
 
 ## Contributing
 
@@ -119,4 +154,4 @@ The system includes comprehensive error handling for:
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.
