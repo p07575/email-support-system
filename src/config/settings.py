@@ -20,4 +20,11 @@ TELEGRAM_SUPPORT_CHAT_ID = os.getenv("TELEGRAM_SUPPORT_CHAT_ID")
 
 # Ollama Settings
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL") 
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
+
+# MySQL Settings
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "email_support")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "email_support_pass")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "email_support_system") 

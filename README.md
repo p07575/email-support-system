@@ -60,6 +60,27 @@ email-support-system/
    OLLAMA_MODEL=your_model_name
    ```
 
+## MySQL Database Setup
+
+This application uses MySQL to store ticket data. Before running the application, you need to set up the database:
+
+1. Make sure MySQL server is installed and running
+2. Update the `.env` file with your MySQL credentials:
+   ```
+   MYSQL_HOST=localhost
+   MYSQL_PORT=3306
+   MYSQL_USER=your_mysql_user
+   MYSQL_PASSWORD=your_mysql_password
+   MYSQL_DATABASE=email_support_system
+   ```
+
+3. Run the database setup script:
+   ```bash
+   python setup_database.py
+   ```
+
+4. The script will create the necessary database and tables automatically
+
 ## Usage
 
 1. Start the application:

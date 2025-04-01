@@ -3,7 +3,7 @@ import re
 import time
 from typing import Optional
 from ..config.settings import TELEGRAM_BOT_TOKEN, TELEGRAM_SUPPORT_CHAT_ID
-from ..models.ticket import ticket_queue
+from ..services.db_service import update_ticket_status
 
 # Initialize bot
 bot = None
@@ -142,7 +142,7 @@ def forward_to_telegram(ticket_id: str, from_email: str, subject: str, message: 
     
     try:
         safe_telegram_send(TELEGRAM_SUPPORT_CHAT_ID, telegram_message)
-        ticket_queue[ticket_id].status = "forwarded_to_support"
+        update_ticket_status(ticket_id, "forwarded_to_support")
         print(f"Forwarded ticket #{ticket_id} to Telegram")
     except Exception as e:
         print(f"Error forwarding to Telegram: {e}")

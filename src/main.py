@@ -12,9 +12,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.config.settings import (
     SMTP_SERVER, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD,
     IMAP_SERVER, IMAP_PORT, IMAP_USERNAME, IMAP_PASSWORD,
-    OLLAMA_HOST, OLLAMA_MODEL
+    OLLAMA_HOST, OLLAMA_MODEL,
+    MYSQL_HOST, MYSQL_DATABASE
 )
-from src.models.ticket import Ticket, ticket_queue
+from src.models.ticket import Ticket
 from src.services.email_service import check_new_emails, send_email
 from src.services.ollama_service import test_ollama_connection
 from src.services.telegram_service import (
@@ -22,6 +23,12 @@ from src.services.telegram_service import (
     telegram_polling_loop, 
     forward_to_telegram,
     set_running_state
+)
+from src.services.db_service import (
+    initialize_db,
+    ensure_db_schema,
+    save_ticket,
+    update_ticket_status
 )
 from src.handlers.telegram_handlers import register_handlers
 
@@ -37,9 +44,11 @@ def handle_new_email(from_email: str, subject: str, body: str, plain_body: str) 
     
     print(f"New email received from {from_email}, Subject: {subject}")
     
-    # Create new ticket
-    ticket = Ticket(ticket_id, from_email, subject, body, plain_body)
-    ticket_queue[ticket_id] = ticket
+    # Create new ticket and save to database
+    success = save_ticket(ticket_id, from_email, subject, body, plain_body)
+    if not success:
+        print(f"Failed to save ticket #{ticket_id} to database")
+        return
     
     # Send acknowledgment
     send_acknowledgment(from_email, ticket_id)
@@ -56,7 +65,7 @@ def send_acknowledgment(to_email: str, ticket_id: str) -> None:
     """
     
     if send_email(to_email, f"Support Request Received - Ticket #{ticket_id}", html_content):
-        ticket_queue[ticket_id].status = "acknowledged"
+        update_ticket_status(ticket_id, "acknowledged")
         print(f"Sent acknowledgment for ticket #{ticket_id}")
 
 def cleanup():
@@ -110,7 +119,20 @@ def main():
         print(f"SMTP Server: {SMTP_SERVER}:{SMTP_PORT}")
         print(f"Ollama Host: {OLLAMA_HOST}")
         print(f"Ollama Model: {OLLAMA_MODEL}")
+        print(f"Database: MySQL at {MYSQL_HOST}/{MYSQL_DATABASE}")
         print("="*50 + "\n")
+        
+        # Initialize and test database connection
+        db_connection = initialize_db()
+        if not db_connection:
+            print("Failed to initialize database connection. Exiting.")
+            return
+            
+        # Ensure database schema is set up
+        schema_valid = ensure_db_schema()
+        if not schema_valid:
+            print("Failed to validate database schema. Exiting.")
+            return
         
         # Test Ollama connection before starting
         ollama_available = test_ollama_connection()
