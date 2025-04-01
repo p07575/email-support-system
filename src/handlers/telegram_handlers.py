@@ -98,8 +98,8 @@ def register_handlers(bot: telebot.TeleBot):
         
         # Show the tickets
         for ticket in tickets:
+            # Format received time
             received_time = ticket["received_at"]
-            # Try to format the time to be more readable
             try:
                 dt = datetime.fromisoformat(received_time)
                 received_time = dt.strftime("%Y-%m-%d %H:%M")
@@ -113,7 +113,18 @@ def register_handlers(bot: telebot.TeleBot):
             list_text += f"#{ticket['id']} - {ticket['status']}\n"
             list_text += f"From: {safe_email}\n"
             list_text += f"Subject: {safe_subject}\n"
-            list_text += f"Received: {received_time}\n\n"
+            list_text += f"Received: {received_time}\n"
+            
+            # Add response time if ticket has been responded to
+            if "response" in ticket and ticket["response"] and "response_time" in ticket:
+                try:
+                    dt = datetime.fromisoformat(ticket["response_time"])
+                    response_time = dt.strftime("%Y-%m-%d %H:%M")
+                    list_text += f"Responded: {response_time}\n"
+                except:
+                    pass
+            
+            list_text += "\n"
             
         list_text += "Use /ticket ticketID to view details"
         safe_telegram_send(message.chat.id, list_text)
