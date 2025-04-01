@@ -17,7 +17,12 @@ from src.config.settings import (
 from src.models.ticket import Ticket, ticket_queue
 from src.services.email_service import check_new_emails, send_email
 from src.services.ollama_service import test_ollama_connection
-from src.services.telegram_service import initialize_telegram, telegram_polling_loop, forward_to_telegram
+from src.services.telegram_service import (
+    initialize_telegram, 
+    telegram_polling_loop, 
+    forward_to_telegram,
+    set_running_state
+)
 from src.handlers.telegram_handlers import register_handlers
 
 # Global state
@@ -60,6 +65,7 @@ def cleanup():
     
     print("\nCleaning up resources...")
     running = False
+    set_running_state(False)  # Update Telegram service running state
     
     if email_thread and email_thread.is_alive():
         email_thread.join(timeout=5)
@@ -75,6 +81,7 @@ def start_background_tasks():
     
     # Initialize the bot
     bot = initialize_telegram()
+    set_running_state(True)  # Set Telegram service running state
     register_handlers(bot)
     
     # Reset the running flag
@@ -86,14 +93,15 @@ def start_background_tasks():
     signal.signal(signal.SIGTERM, lambda sig, frame: (cleanup(), sys.exit(0)))
     
     # Start email checking thread
-    email_thread = threading.Thread(target=lambda: check_new_emails(handle_new_email), daemon=True)
+    email_thread = threading.Thread(target=check_new_emails, args=(handle_new_email,), daemon=True)
     email_thread.start()
     
     # Start Telegram polling loop
     telegram_loop_thread = threading.Thread(target=telegram_polling_loop, daemon=True)
     telegram_loop_thread.start()
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the application"""
     try:
         print("\n" + "="*50)
         print("📧 EMAIL SUPPORT SYSTEM STARTING 📧")
@@ -126,5 +134,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Unexpected error: {e}")
         cleanup()
-    finally:
-        sys.exit(0) 
+
+if __name__ == "__main__":
+    main()
+    sys.exit(0) 

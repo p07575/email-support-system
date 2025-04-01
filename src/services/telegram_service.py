@@ -7,6 +7,7 @@ from ..models.ticket import ticket_queue
 
 # Initialize bot
 bot = None
+running = True  # Default value
 
 def initialize_telegram():
     """Initialize the Telegram bot"""
@@ -21,6 +22,8 @@ def initialize_telegram():
         telebot.types.BotCommand("/ticket", "Show details of a specific ticket (usage: /ticket ticket_id)"),
         telebot.types.BotCommand("/reply", "Reply to a ticket (usage: /reply ticket_id your_response)")
     ])
+    
+    return bot
 
 def sanitize_telegram_markdown(text: str) -> str:
     """Very aggressive sanitization for Telegram Markdown formatting to avoid API errors."""
@@ -187,3 +190,8 @@ def telegram_polling_loop():
                 bot.remove_webhook()
             except:
                 pass 
+
+def set_running_state(state: bool):
+    """Set the running state for the Telegram polling loop"""
+    global running
+    running = state 
