@@ -1,11 +1,12 @@
 import telebot
+import os
 from datetime import datetime
-from typing import Dict
+from typing import Dict, List
 from ..models.ticket import Ticket
-from ..services.telegram_service import safe_telegram_send, sanitize_telegram_markdown
+from ..services.telegram_service import safe_telegram_send, sanitize_telegram_markdown, send_file_via_telegram
 from ..services.ollama_service import process_with_deepseek
 from ..services.email_service import send_response_email
-from ..services.db_service import save_ticket_response, update_ticket_status, get_ticket, get_recent_tickets, get_all_tickets
+from ..services.db_service import save_ticket_response, update_ticket_status, get_ticket, get_recent_tickets, get_all_tickets, get_ticket_attachments
 
 def register_handlers(bot: telebot.TeleBot):
     """Register all Telegram command handlers"""
@@ -36,8 +37,53 @@ def register_handlers(bot: telebot.TeleBot):
             # First, reply to the agent showing what will be sent
             bot.reply_to(message, f"✅ Sending this response to {customer_email}:\n\n{processed_response}")
             
+            # Check if there are file attachments in this chat (for replies with files)
+            # This is a workaround since the original message might not contain file attachments
+            # We'll check the last 5 messages in the chat for files
+            attachments = []
+            try:
+                # Get chat history
+                updates = bot.get_updates()
+                
+                # Find files sent by the user before this command
+                for update in reversed(updates):
+                    # Skip non-message updates
+                    if not hasattr(update, 'message') or not update.message:
+                        continue
+                        
+                    # Skip messages not from this user or chat
+                    if update.message.chat.id != message.chat.id or update.message.from_user.id != message.from_user.id:
+                        continue
+                        
+                    # Check if message has document
+                    if hasattr(update.message, 'document') and update.message.document:
+                        file_info = bot.get_file(update.message.document.file_id)
+                        file_path = os.path.join(os.path.expanduser('~'), 'temp_attachments', update.message.document.file_name)
+                        
+                        # Create directory if it doesn't exist
+                        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                        
+                        # Download file
+                        downloaded_file = bot.download_file(file_info.file_path)
+                        with open(file_path, 'wb') as f:
+                            f.write(downloaded_file)
+                            
+                        attachments.append({
+                            'filename': update.message.document.file_name,
+                            'path': file_path,
+                            'content_type': update.message.document.mime_type,
+                            'size': update.message.document.file_size
+                        })
+                
+                if attachments:
+                    bot.send_message(message.chat.id, f"🔖 Including {len(attachments)} attachment(s) with your response")
+            except Exception as e:
+                print(f"Error processing attachments: {e}")
+                # Continue without attachments if there's an error
+                attachments = []
+            
             # Then send to customer
-            if send_response_email(customer_email, ticket_id, processed_response):
+            if send_response_email(customer_email, ticket_id, processed_response, attachments):
                 # Update ticket in database
                 save_ticket_response(ticket_id, processed_response)
                 bot.send_message(message.chat.id, f"✅ Response delivered to customer for ticket #{ticket_id}")
@@ -53,10 +99,11 @@ def register_handlers(bot: telebot.TeleBot):
             "This bot helps you handle customer support emails.\n\n"
             "Commands:\n"
             "/reply ticket_id your_response - Reply to a customer ticket\n"
-            "/status - Show current tickets in the queue\n"
+            "/status - Show current tickets in the queue (excluding responded tickets)\n"
             "/list - List all recent tickets\n"
             "/ticket ticket_id - Show details of a specific ticket\n"
-            "/help - Show this help message"
+            "/help - Show this help message\n\n"
+            "ℹ️ You can also send file attachments in your replies. Simply send the files to this chat before using the /reply command."
         )
         safe_telegram_send(message.chat.id, help_text)
 
@@ -81,7 +128,13 @@ def register_handlers(bot: telebot.TeleBot):
             status_text += f"Ticket: #{ticket['id']}\n"
             status_text += f"From: {safe_email}\n"
             status_text += f"Subject: {safe_subject}\n"
-            status_text += f"Status: {ticket['status']}\n\n"
+            status_text += f"Status: {ticket['status']}\n"
+            
+            # Show attachment count if any
+            if 'attachments' in ticket and ticket['attachments']:
+                status_text += f"📎 Attachments: {len(ticket['attachments'])}\n"
+                
+            status_text += "\n"
             
         safe_telegram_send(message.chat.id, status_text)
 
@@ -123,6 +176,10 @@ def register_handlers(bot: telebot.TeleBot):
                     list_text += f"Responded: {response_time}\n"
                 except:
                     pass
+                    
+            # Show attachment count if any
+            if 'attachments' in ticket and ticket['attachments']:
+                list_text += f"📎 Attachments: {len(ticket['attachments'])}\n"
             
             list_text += "\n"
             
@@ -170,10 +227,20 @@ def register_handlers(bot: telebot.TeleBot):
                 f"From: {safe_email}\n"
                 f"Subject: {safe_subject}\n"
                 f"Status: {ticket['status']}\n"
-                f"Received: {received_time}\n\n"
-                f"Message:\n{safe_message}\n\n"
+                f"Received: {received_time}"
             )
             
+            # Add attachment information if any
+            if 'attachments' in ticket and ticket['attachments']:
+                attachments = ticket['attachments']
+                ticket_text += f"\n\n📎 Attachments ({len(attachments)}):"
+                for attachment in attachments:
+                    ticket_text += f"\n- {attachment['filename']}"
+            
+            # Add message preview
+            ticket_text += f"\n\nMessage:\n{safe_message}"
+            
+            # Add response if available
             if "response" in ticket and ticket["response"]:
                 # Format response time
                 response_time = ticket.get("response_time", "Unknown")
@@ -185,18 +252,35 @@ def register_handlers(bot: telebot.TeleBot):
                     
                 safe_response = sanitize_telegram_markdown(ticket["response"][:500] + "..." if len(ticket["response"]) > 500 else ticket["response"])
                 ticket_text += (
-                    f"Response:\n"
+                    f"\n\nResponse:\n"
                     f"{safe_response}\n\n"
-                    f"Response Time: {response_time}\n"
+                    f"Response Time: {response_time}"
                 )
                 
             # Add reply command on a separate line for easy copying
-            ticket_text += f"\nTo reply, use this command (click to copy):\n/reply {ticket_id}"
+            ticket_text += f"\n\nTo reply, use this command (click to copy):\n/reply {ticket_id}"
                 
+            # Send ticket information
             safe_telegram_send(message.chat.id, ticket_text)
+            
+            # Send attachments if any
+            if 'attachments' in ticket and ticket['attachments']:
+                for attachment in ticket['attachments']:
+                    file_path = attachment.get('file_path')
+                    if file_path and os.path.exists(file_path):
+                        send_file_via_telegram(message.chat.id, file_path, f"Attachment: {attachment['filename']}")
             
         except Exception as e:
             bot.reply_to(message, f"❌ Error fetching ticket: {str(e)}")
+            
+    # Handle document uploads (for attachments)
+    @bot.message_handler(content_types=['document'])
+    def handle_document(message):
+        bot.reply_to(
+            message, 
+            "📎 File received. To include this file in your response, use the /reply command after sending the file.\n"
+            "For example: /reply TKT-20250401001 Here is the information you requested."
+        )
             
     # Handle unknown commands
     @bot.message_handler(func=lambda message: message.text.startswith('/'))

@@ -5,15 +5,16 @@ import threading
 import signal
 import atexit
 from datetime import datetime
+from typing import List, Dict
 
 # Add the src directory to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config.settings import (
-    SMTP_SERVER, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD,
-    IMAP_SERVER, IMAP_PORT, IMAP_USERNAME, IMAP_PASSWORD,
-    OLLAMA_HOST, OLLAMA_MODEL,
-    MYSQL_HOST, MYSQL_DATABASE
+    EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, EMAIL_USERNAME, EMAIL_PASSWORD,
+    EMAIL_IMAP_SERVER, EMAIL_IMAP_PORT, EMAIL_CHECK_INTERVAL,
+    OLLAMA_API_URL, OLLAMA_MODEL,
+    DB_HOST, DB_NAME
 )
 from src.models.ticket import Ticket
 from src.services.email_service import check_new_emails, send_email
@@ -37,15 +38,44 @@ running = True
 email_thread = None
 telegram_loop_thread = None
 
-def handle_new_email(from_email: str, subject: str, body: str, plain_body: str) -> None:
+def handle_new_email(from_email: str, subject: str, body: str, plain_body: str, attachments: List[Dict] = None) -> None:
     """Handle a new email by creating a ticket and forwarding to Telegram"""
     # Generate ticket ID
     ticket_id = f"TKT-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     
-    print(f"New email received from {from_email}, Subject: {subject}")
+    print("\n" + "="*50)
+    print(f"HANDLING NEW EMAIL: {subject}")
+    print(f"From: {from_email}")
+    print(f"Body length: {len(body)} characters")
+    
+    # Detailed attachment debugging
+    if attachments and len(attachments) > 0:
+        print(f"📎 EMAIL HAS {len(attachments)} ATTACHMENT(S) 📎")
+        for i, attachment in enumerate(attachments):
+            print(f"  Attachment {i+1}: {attachment['filename']}")
+            print(f"  Type: {attachment.get('content_type', 'unknown')}")
+            print(f"  Size: {attachment.get('size', 0)} bytes")
+            print(f"  Path: {attachment.get('path', 'unknown')}")
+            
+            # Check if file actually exists
+            path = attachment.get('path', '')
+            if path and os.path.exists(path):
+                print(f"  File exists: ✅")
+                # Verify file size
+                actual_size = os.path.getsize(path)
+                print(f"  Disk size: {actual_size} bytes")
+            else:
+                print(f"  File exists: ❌")
+            print("  " + "-"*30)
+    else:
+        print("❌ NO ATTACHMENTS DETECTED IN EMAIL")
+        print("This message was expected to have attachments (README.md)")
+        print("Check the email message structure and attachment detection logic")
+    
+    print("="*50 + "\n")
     
     # Create new ticket and save to database
-    success = save_ticket(ticket_id, from_email, subject, body, plain_body)
+    success = save_ticket(ticket_id, from_email, subject, body, plain_body, attachments)
     if not success:
         print(f"Failed to save ticket #{ticket_id} to database")
         return
@@ -54,7 +84,7 @@ def handle_new_email(from_email: str, subject: str, body: str, plain_body: str) 
     send_acknowledgment(from_email, ticket_id)
     
     # Forward to Telegram
-    forward_to_telegram(ticket_id, from_email, subject, plain_body)
+    forward_to_telegram(ticket_id, from_email, subject, plain_body, attachments)
 
 def send_acknowledgment(to_email: str, ticket_id: str) -> None:
     """Send an acknowledgment email to the customer"""
@@ -115,11 +145,11 @@ def main():
         print("\n" + "="*50)
         print("📧 EMAIL SUPPORT SYSTEM STARTING 📧")
         print("="*50)
-        print(f"IMAP Server: {IMAP_SERVER}:{IMAP_PORT}")
-        print(f"SMTP Server: {SMTP_SERVER}:{SMTP_PORT}")
-        print(f"Ollama Host: {OLLAMA_HOST}")
+        print(f"IMAP Server: {EMAIL_IMAP_SERVER}:{EMAIL_IMAP_PORT}")
+        print(f"SMTP Server: {EMAIL_SMTP_SERVER}:{EMAIL_SMTP_PORT}")
+        print(f"Ollama Host: {OLLAMA_API_URL}")
         print(f"Ollama Model: {OLLAMA_MODEL}")
-        print(f"Database: MySQL at {MYSQL_HOST}/{MYSQL_DATABASE}")
+        print(f"Database: MySQL at {DB_HOST}/{DB_NAME}")
         print("="*50 + "\n")
         
         # Initialize and test database connection

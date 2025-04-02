@@ -2,14 +2,14 @@ import ollama
 import requests
 import re
 from typing import Optional
-from ..config.settings import OLLAMA_HOST, OLLAMA_MODEL
+from ..config.settings import OLLAMA_API_URL, OLLAMA_MODEL
 
 def test_ollama_connection() -> bool:
     """Test if the Ollama server is reachable and the model is available"""
     try:
-        print(f"Testing connection to Ollama server at {OLLAMA_HOST}...")
+        print(f"Testing connection to Ollama server at {OLLAMA_API_URL}...")
         # Try a basic request to get model list
-        response = requests.get(f"{OLLAMA_HOST}/api/tags")
+        response = requests.get(f"{OLLAMA_API_URL}/api/tags")
         if response.status_code != 200:
             print(f"Error connecting to Ollama: HTTP status {response.status_code}")
             return False
@@ -27,12 +27,12 @@ def test_ollama_connection() -> bool:
         return True
     except Exception as e:
         print(f"Error testing Ollama connection: {e}")
-        print(f"Make sure Ollama is running at {OLLAMA_HOST}")
+        print(f"Make sure Ollama is running at {OLLAMA_API_URL}")
         return False
 
 def process_with_deepseek(original_query: str, response_text: str) -> str:
     """Process a response with DeepSeek via Ollama"""
-    print(f"Processing response with Ollama model {OLLAMA_MODEL} via {OLLAMA_HOST}...")
+    print(f"Processing response with Ollama model {OLLAMA_MODEL} via {OLLAMA_API_URL}...")
     
     # Shorten the original query if it's too long
     max_len = 1000
@@ -59,7 +59,7 @@ def process_with_deepseek(original_query: str, response_text: str) -> str:
     """
     
     try:
-        print(f"Sending request to Ollama at {OLLAMA_HOST} using model {OLLAMA_MODEL}...")
+        print(f"Sending request to Ollama at {OLLAMA_API_URL} using model {OLLAMA_MODEL}...")
         
         # Check if OLLAMA_MODEL contains a slash - if so, it might not work with ollama.chat
         if '/' in OLLAMA_MODEL:
@@ -69,7 +69,7 @@ def process_with_deepseek(original_query: str, response_text: str) -> str:
                 "prompt": prompt,
                 "stream": False
             }
-            response = requests.post(f"{OLLAMA_HOST}/api/generate", json=payload)
+            response = requests.post(f"{OLLAMA_API_URL}/api/generate", json=payload)
             if response.status_code != 200:
                 raise Exception(f"HTTP Error {response.status_code}: {response.text}")
                 

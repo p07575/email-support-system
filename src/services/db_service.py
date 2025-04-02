@@ -4,17 +4,17 @@ from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 import json
 from ..config.settings import (
-    MYSQL_HOST, MYSQL_PORT, MYSQL_USER, 
-    MYSQL_PASSWORD, MYSQL_DATABASE
+    DB_HOST, DB_PORT, DB_USER, 
+    DB_PASSWORD, DB_NAME
 )
 
 # Create a connection pool
 db_config = {
-    'host': MYSQL_HOST,
-    'port': MYSQL_PORT,
-    'user': MYSQL_USER,
-    'password': MYSQL_PASSWORD,
-    'database': MYSQL_DATABASE,
+    'host': DB_HOST,
+    'port': DB_PORT,
+    'user': DB_USER,
+    'password': DB_PASSWORD,
+    'database': DB_NAME,
 }
 
 # Initialize the connection pool with a small set of connections
@@ -29,7 +29,7 @@ def initialize_db():
             pool_size=5,
             **db_config
         )
-        print(f"Database connection pool initialized: {MYSQL_HOST}:{MYSQL_PORT}")
+        print(f"Database connection pool initialized: {DB_HOST}:{DB_PORT}")
         
         # Test the connection by getting a connection from the pool
         connection = connection_pool.get_connection()
@@ -47,8 +47,8 @@ def get_connection():
     return connection_pool.get_connection()
 
 # Ticket functions
-def save_ticket(ticket_id: str, from_email: str, subject: str, message: str, plain_message: str) -> bool:
-    """Save a new ticket to the database"""
+def save_ticket(ticket_id: str, from_email: str, subject: str, message: str, plain_message: str, attachments: List[Dict] = None) -> bool:
+    """Save a new ticket to the database with optional attachments"""
     try:
         connection = get_connection()
         cursor = connection.cursor(dictionary=True)
@@ -63,6 +63,12 @@ def save_ticket(ticket_id: str, from_email: str, subject: str, message: str, pla
         connection.commit()
         cursor.close()
         connection.close()
+        
+        # Save attachments if any
+        if attachments and len(attachments) > 0:
+            print(f"Saving {len(attachments)} attachments for ticket #{ticket_id}")
+            save_ticket_attachments(ticket_id, attachments)
+        
         return True
     except Exception as e:
         print(f"Error saving ticket to database: {e}")
@@ -114,8 +120,9 @@ def save_ticket_response(ticket_id: str, response_text: str) -> bool:
         return False
 
 def get_ticket(ticket_id: str) -> Optional[Dict]:
-    """Get a ticket by ID"""
+    """Get a ticket by ID with its attachments"""
     try:
+        print(f"Fetching ticket #{ticket_id} from database")
         connection = get_connection()
         cursor = connection.cursor(dictionary=True)
         
@@ -125,9 +132,12 @@ def get_ticket(ticket_id: str) -> Optional[Dict]:
         ticket = cursor.fetchone()
         
         if not ticket:
+            print(f"❌ Ticket #{ticket_id} not found in database")
             cursor.close()
             connection.close()
             return None
+        
+        print(f"✅ Found ticket #{ticket_id} in database")
         
         # Get the latest response
         response_query = """
@@ -140,6 +150,17 @@ def get_ticket(ticket_id: str) -> Optional[Dict]:
         cursor.execute(response_query, (ticket_id,))
         response = cursor.fetchone()
         
+        # Get attachments
+        print(f"Fetching attachments for ticket #{ticket_id}")
+        attachments_query = """
+        SELECT id, filename, file_path, content_type, file_size 
+        FROM attachments 
+        WHERE ticket_id = %s
+        """
+        cursor.execute(attachments_query, (ticket_id,))
+        attachments = cursor.fetchall()
+        print(f"Found {len(attachments)} attachment(s) for ticket #{ticket_id}")
+        
         # Convert datetime objects to ISO format strings for JSON serialization
         for key, value in ticket.items():
             if isinstance(value, datetime):
@@ -150,11 +171,21 @@ def get_ticket(ticket_id: str) -> Optional[Dict]:
             ticket['response'] = response['response_text']
             ticket['response_time'] = response['sent_at'].isoformat()
         
+        # Add attachments to the ticket
+        ticket['attachments'] = attachments
+        for i, attachment in enumerate(attachments):
+            print(f"  Attachment {i+1}: {attachment['filename']} ({attachment.get('content_type', 'unknown')}, {attachment.get('file_size', 0)} bytes)")
+            print(f"  File path: {attachment.get('file_path', 'unknown')}")
+        
         cursor.close()
         connection.close()
         return ticket
     except Exception as e:
-        print(f"Error getting ticket: {e}")
+        print(f"❌ Error getting ticket: {e}")
+        # Print the traceback for more detailed error information
+        import traceback
+        traceback.print_exc()
+        
         if 'connection' in locals() and connection.is_connected():
             connection.close()
         return None
@@ -211,6 +242,49 @@ def get_recent_tickets(limit: int = 10) -> List[Dict]:
             connection.close()
         return []
 
+# Add a new function to save attachments
+def save_ticket_attachments(ticket_id: str, attachments: List[Dict]) -> bool:
+    """Save attachments for a ticket"""
+    if not attachments:
+        print(f"No attachments to save for ticket #{ticket_id}")
+        return True
+        
+    print(f"Saving {len(attachments)} attachment(s) for ticket #{ticket_id}")
+    try:
+        connection = get_connection()
+        cursor = connection.cursor()
+        
+        for i, attachment in enumerate(attachments):
+            print(f"Saving attachment {i+1}/{len(attachments)}: {attachment['filename']}")
+            query = """
+            INSERT INTO attachments 
+            (ticket_id, filename, file_path, content_type, file_size) 
+            VALUES (%s, %s, %s, %s, %s)
+            """
+            cursor.execute(query, (
+                ticket_id, 
+                attachment['filename'], 
+                attachment['path'], 
+                attachment.get('content_type', 'application/octet-stream'),
+                attachment.get('size', 0)
+            ))
+            print(f"✅ Attachment {i+1} saved to database: {attachment['filename']}")
+        
+        connection.commit()
+        cursor.close()
+        connection.close()
+        print(f"All {len(attachments)} attachment(s) saved successfully for ticket #{ticket_id}")
+        return True
+    except Exception as e:
+        print(f"❌ Error saving attachments: {e}")
+        # Print the traceback for more detailed error information
+        import traceback
+        traceback.print_exc()
+        
+        if 'connection' in locals() and connection.is_connected():
+            connection.close()
+        return False
+
 # Database initialization and schema validation
 def ensure_db_schema():
     """Ensure the database schema is properly set up"""
@@ -264,6 +338,25 @@ def ensure_db_schema():
             """)
             
             schema_valid = False
+            
+        if 'attachments' not in tables:
+            print("attachments table not found, creating...")
+            
+            # Create attachments table
+            cursor.execute("""
+            CREATE TABLE attachments (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                ticket_id VARCHAR(30) NOT NULL,
+                filename VARCHAR(255) NOT NULL,
+                file_path VARCHAR(255) NOT NULL,
+                content_type VARCHAR(100) NOT NULL,
+                file_size INT NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+            )
+            """)
+            
+            schema_valid = False
         
         connection.commit()
         cursor.close()
@@ -277,4 +370,28 @@ def ensure_db_schema():
         print(f"Error ensuring database schema: {e}")
         if 'connection' in locals() and connection.is_connected():
             connection.close()
-        return False 
+        return False
+
+# Add function to get attachments for a ticket
+def get_ticket_attachments(ticket_id: str) -> List[Dict]:
+    """Get all attachments for a ticket"""
+    try:
+        connection = get_connection()
+        cursor = connection.cursor(dictionary=True)
+        
+        query = """
+        SELECT id, filename, file_path, content_type, file_size 
+        FROM attachments 
+        WHERE ticket_id = %s
+        """
+        cursor.execute(query, (ticket_id,))
+        attachments = cursor.fetchall()
+        
+        cursor.close()
+        connection.close()
+        return attachments
+    except Exception as e:
+        print(f"Error getting attachments: {e}")
+        if 'connection' in locals() and connection.is_connected():
+            connection.close()
+        return [] 

@@ -1,8 +1,9 @@
 import telebot
 import re
 import time
-from typing import Optional
-from ..config.settings import TELEGRAM_BOT_TOKEN, TELEGRAM_SUPPORT_CHAT_ID
+import os
+from typing import Optional, List, Dict
+from ..config.settings import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 from ..services.db_service import update_ticket_status
 
 # Initialize bot
@@ -113,7 +114,48 @@ def safe_telegram_send(chat_id: int, message: str, parse_mode: Optional[str] = N
                     
         return None
 
-def forward_to_telegram(ticket_id: str, from_email: str, subject: str, message: str) -> None:
+def send_file_via_telegram(chat_id: int, file_path: str, caption: Optional[str] = None) -> bool:
+    """Send a file to Telegram"""
+    global bot
+    
+    if not bot:
+        initialize_telegram()
+    
+    try:
+        print(f"Sending file to Telegram: {file_path}")
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            print(f"❌ Error: File not found: {file_path}")
+            return False
+            
+        # Get file size
+        file_size = os.path.getsize(file_path)
+        print(f"File size: {file_size} bytes ({file_size/1024/1024:.2f} MB)")
+        
+        # Check if file is too large for Telegram (max 50MB)
+        if file_size > 50 * 1024 * 1024:
+            print(f"❌ Error: File too large for Telegram: {file_path} ({file_size} bytes)")
+            safe_telegram_send(chat_id, f"⚠️ File is too large to send via Telegram: {os.path.basename(file_path)} ({file_size} bytes)")
+            return False
+        
+        # Send file
+        print(f"Opening file for sending: {file_path}")
+        with open(file_path, 'rb') as f:
+            print(f"Calling Telegram API to send document...")
+            message = bot.send_document(chat_id, f, caption=caption)
+            print(f"Telegram API message_id: {message.message_id}")
+        
+        print(f"✅ File successfully sent via Telegram: {file_path}")
+        return True
+    except Exception as e:
+        print(f"❌ Error sending file via Telegram: {e}")
+        # Print the traceback for more detailed error info
+        import traceback
+        traceback.print_exc()
+        return False
+
+def forward_to_telegram(ticket_id: str, from_email: str, subject: str, message: str, attachments: List[Dict] = None) -> None:
     """Forward a new ticket to Telegram"""
     global bot
     
@@ -129,23 +171,62 @@ def forward_to_telegram(ticket_id: str, from_email: str, subject: str, message: 
     safe_subject = sanitize_telegram_markdown(subject)
     safe_message_preview = sanitize_telegram_markdown(message_preview)
     
+    print(f"Forwarding ticket #{ticket_id} to Telegram")
+    
+    # Add attachment info if any
+    attachment_info = ""
+    if attachments and len(attachments) > 0:
+        print(f"Including information about {len(attachments)} attachment(s) in Telegram message")
+        attachment_info = f"\n📎 Attachments: {len(attachments)}\n"
+        for i, attachment in enumerate(attachments):
+            attachment_name = attachment.get('filename', 'Unknown')
+            attachment_type = attachment.get('content_type', 'unknown')
+            attachment_info += f"- {attachment_name} ({attachment_type})\n"
+            print(f"  Attachment {i+1}: {attachment_name} ({attachment_type})")
+    else:
+        print("No attachments to include in Telegram message")
+    
     # Make the reply command a separate line so it's easily copiable
     telegram_message = (
         f"🆕 New Support Request\n"
         f"Ticket ID: #{ticket_id}\n"
         f"From: {safe_from_email}\n"
         f"Subject: {safe_subject}\n\n"
-        f"Message:\n{safe_message_preview}\n\n"
+        f"Message:\n{safe_message_preview}\n"
+        f"{attachment_info}\n"
         f"To reply, use this command (click to copy):\n"
         f"/reply {ticket_id}"
     )
     
     try:
-        safe_telegram_send(TELEGRAM_SUPPORT_CHAT_ID, telegram_message)
+        print(f"Sending ticket #{ticket_id} information to Telegram")
+        safe_telegram_send(TELEGRAM_CHAT_ID, telegram_message)
         update_ticket_status(ticket_id, "forwarded_to_support")
-        print(f"Forwarded ticket #{ticket_id} to Telegram")
+        print(f"✅ Forwarded ticket #{ticket_id} information to Telegram")
+        
+        # Send attachments if any
+        if attachments and len(attachments) > 0:
+            print(f"Sending {len(attachments)} attachment(s) to Telegram")
+            for i, attachment in enumerate(attachments):
+                file_path = attachment.get('path')
+                if file_path and os.path.exists(file_path):
+                    print(f"Sending attachment {i+1}/{len(attachments)}: {attachment['filename']}")
+                    caption = f"#{ticket_id} - {attachment['filename']}"
+                    success = send_file_via_telegram(TELEGRAM_CHAT_ID, file_path, caption)
+                    if success:
+                        print(f"✅ Attachment {i+1} sent successfully: {attachment['filename']}")
+                    else:
+                        print(f"❌ Failed to send attachment {i+1}: {attachment['filename']}")
+                else:
+                    print(f"❌ Attachment file not found: {file_path}")
+            print(f"Finished sending attachments for ticket #{ticket_id}")
+        else:
+            print(f"No attachments to send for ticket #{ticket_id}")
     except Exception as e:
-        print(f"Error forwarding to Telegram: {e}")
+        print(f"❌ Error forwarding to Telegram: {e}")
+        # Print traceback for more detailed error information
+        import traceback
+        traceback.print_exc()
 
 def telegram_polling_loop():
     """Main Telegram polling loop"""
