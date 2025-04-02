@@ -46,14 +46,13 @@ email-support-system/
 3. Create a `.env` file with the following variables:
    ```
    # Email Server Settings
-   SMTP_SERVER=your_smtp_server
-   SMTP_PORT=587
-   SMTP_USERNAME=your_email
-   SMTP_PASSWORD=your_password
-   IMAP_SERVER=your_imap_server
-   IMAP_PORT=993
-   IMAP_USERNAME=your_email
-   IMAP_PASSWORD=your_password
+   EMAIL_SMTP_SERVER=your_smtp_server
+   EMAIL_SMTP_PORT=587
+   EMAIL_USERNAME=your_email
+   EMAIL_PASSWORD=your_password
+   EMAIL_IMAP_SERVER=your_imap_server
+   EMAIL_IMAP_PORT=993
+   EMAIL_CHECK_INTERVAL=60  # in seconds
 
    # Telegram Settings
    TELEGRAM_BOT_TOKEN=your_bot_token
