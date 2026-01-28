@@ -1,4 +1,5 @@
 import telebot
+from telebot import types
 import re
 import time
 import os
@@ -28,6 +29,35 @@ def clear_pending_confirmation(ticket_id: str):
     """Clear pending confirmation for a ticket"""
     if ticket_id in pending_confirmations:
         del pending_confirmations[ticket_id]
+
+
+def create_ticket_keyboard(ticket_id: str, has_draft: bool = False) -> types.InlineKeyboardMarkup:
+    """Create inline keyboard for ticket actions"""
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    
+    if has_draft:
+        # Buttons for draft confirmation
+        keyboard.add(
+            types.InlineKeyboardButton("✅ Send Draft", callback_data=f"confirm:{ticket_id}"),
+            types.InlineKeyboardButton("🔄 Regenerate", callback_data=f"regen:{ticket_id}")
+        )
+        keyboard.add(
+            types.InlineKeyboardButton("✏️ Edit Draft", callback_data=f"edit:{ticket_id}"),
+            types.InlineKeyboardButton("📝 Custom Reply", callback_data=f"reply:{ticket_id}")
+        )
+    else:
+        # Buttons for ticket without draft
+        keyboard.add(
+            types.InlineKeyboardButton("📝 Reply", callback_data=f"reply:{ticket_id}"),
+            types.InlineKeyboardButton("📋 Details", callback_data=f"details:{ticket_id}")
+        )
+    
+    keyboard.add(
+        types.InlineKeyboardButton("🗑️ Archive", callback_data=f"archive:{ticket_id}")
+    )
+    
+    return keyboard
+
 
 def initialize_telegram():
     """Initialize the Telegram bot"""
@@ -205,21 +235,22 @@ def forward_to_telegram(ticket_id: str, from_email: str, subject: str, message: 
     else:
         print("No attachments to include in Telegram message")
     
-    # Make the reply command a separate line so it's easily copiable
+    # Message with ticket info
     telegram_message = (
         f"🆕 New Support Request\n"
-        f"Ticket ID: #{ticket_id}\n"
+        f"Ticket ID: `{ticket_id}`\n"
         f"From: {safe_from_email}\n"
         f"Subject: {safe_subject}\n\n"
         f"Message:\n{safe_message_preview}\n"
-        f"{attachment_info}\n"
-        f"To reply, use this command (click to copy):\n"
-        f"/reply {ticket_id}"
+        f"{attachment_info}"
     )
+    
+    # Create inline keyboard for actions
+    keyboard = create_ticket_keyboard(ticket_id, has_draft=False)
     
     try:
         print(f"Sending ticket #{ticket_id} information to Telegram")
-        safe_telegram_send(TELEGRAM_CHAT_ID, telegram_message)
+        bot.send_message(TELEGRAM_CHAT_ID, telegram_message, reply_markup=keyboard)
         update_ticket_status(ticket_id, "forwarded_to_support")
         print(f"✅ Forwarded ticket #{ticket_id} information to Telegram")
         
@@ -281,20 +312,19 @@ def forward_to_telegram_with_draft(ticket_id: str, from_email: str, subject: str
     # Message with draft and confirmation options
     telegram_message = (
         f"🆕 New Support Request (AI Draft Ready)\n"
-        f"Ticket ID: #{ticket_id}\n"
+        f"Ticket ID: `{ticket_id}`\n"
         f"From: {safe_from_email}\n"
         f"Subject: {safe_subject}\n\n"
         f"📩 Customer Message:\n{safe_message_preview}\n"
         f"{attachment_info}\n"
-        f"🤖 AI Draft Response:\n{safe_draft}\n\n"
-        f"Actions:\n"
-        f"/confirm {ticket_id} - Send this draft response\n"
-        f"/edit {ticket_id} your_changes - Edit and send\n"
-        f"/reply {ticket_id} custom_response - Write your own response"
+        f"🤖 AI Draft Response:\n{safe_draft}"
     )
     
+    # Create inline keyboard for actions
+    keyboard = create_ticket_keyboard(ticket_id, has_draft=True)
+    
     try:
-        safe_telegram_send(TELEGRAM_CHAT_ID, telegram_message)
+        bot.send_message(TELEGRAM_CHAT_ID, telegram_message, reply_markup=keyboard)
         update_ticket_status(ticket_id, "pending_confirmation")
         print(f"✅ Forwarded ticket #{ticket_id} with draft to Telegram")
         
