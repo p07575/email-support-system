@@ -15,6 +15,7 @@ db_config = {
     'user': DB_USER,
     'password': DB_PASSWORD,
     'database': DB_NAME,
+    'auth_plugin': 'caching_sha2_password',  # MySQL 8.0+ default auth
 }
 
 # Initialize the connection pool with a small set of connections
