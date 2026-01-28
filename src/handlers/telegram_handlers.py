@@ -1,4 +1,5 @@
 import telebot
+from telebot import types
 import os
 from datetime import datetime
 from typing import Dict, List
@@ -8,7 +9,9 @@ from ..services.telegram_service import (
     sanitize_telegram_markdown, 
     send_file_via_telegram,
     get_pending_confirmation,
-    clear_pending_confirmation
+    clear_pending_confirmation,
+    set_pending_confirmation,
+    create_ticket_keyboard
 )
 from ..services.ollama_service import process_with_deepseek
 from ..services.openrouter_service import generate_ai_response
@@ -24,9 +27,273 @@ from ..services.db_service import (
     get_draft_response
 )
 
+# Store pending edit states: {chat_id: ticket_id}
+pending_edits: Dict[int, str] = {}
+pending_replies: Dict[int, str] = {}
+
 def register_handlers(bot: telebot.TeleBot):
     """Register all Telegram command handlers"""
     
+    # ============ CALLBACK QUERY HANDLERS (Button clicks) ============
+    
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('confirm:'))
+    def callback_confirm(call):
+        """Handle confirm button click"""
+        ticket_id = call.data.split(':')[1]
+        
+        try:
+            # Get the pending draft
+            draft_response = get_pending_confirmation(ticket_id)
+            if not draft_response:
+                draft_response = get_draft_response(ticket_id)
+            
+            if not draft_response:
+                bot.answer_callback_query(call.id, "❌ No draft found for this ticket")
+                return
+            
+            # Get ticket from database
+            ticket_data = get_ticket(ticket_id)
+            if not ticket_data:
+                bot.answer_callback_query(call.id, "❌ Ticket not found")
+                return
+            
+            customer_email = ticket_data["from_email"]
+            
+            # Format the response
+            formatted_response = f"Dear Customer,\n\n{draft_response}\n\nThanks,\nThe StudyFate Team"
+            
+            # Answer callback immediately
+            bot.answer_callback_query(call.id, "⏳ Sending response...")
+            
+            # Update message to show sending status
+            bot.edit_message_text(
+                f"⏳ Sending response to {customer_email}...",
+                call.message.chat.id,
+                call.message.message_id
+            )
+            
+            # Send to customer
+            if send_response_email(customer_email, ticket_id, formatted_response):
+                save_ticket_response(ticket_id, formatted_response)
+                clear_pending_confirmation(ticket_id)
+                bot.edit_message_text(
+                    f"✅ Response sent successfully!\n\nTicket: `{ticket_id}`\nTo: {customer_email}",
+                    call.message.chat.id,
+                    call.message.message_id
+                )
+            else:
+                bot.edit_message_text(
+                    f"❌ Failed to send email for ticket {ticket_id}",
+                    call.message.chat.id,
+                    call.message.message_id
+                )
+        except Exception as e:
+            bot.answer_callback_query(call.id, f"❌ Error: {str(e)[:50]}")
+    
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('regen:'))
+    def callback_regenerate(call):
+        """Handle regenerate button click"""
+        ticket_id = call.data.split(':')[1]
+        
+        try:
+            ticket_data = get_ticket(ticket_id)
+            if not ticket_data:
+                bot.answer_callback_query(call.id, "❌ Ticket not found")
+                return
+            
+            bot.answer_callback_query(call.id, "🔄 Regenerating AI response...")
+            
+            # Update message
+            bot.edit_message_text(
+                f"🔄 Regenerating AI response for ticket `{ticket_id}`...",
+                call.message.chat.id,
+                call.message.message_id
+            )
+            
+            # Get RAG context
+            context = get_context_for_email(ticket_data["plain_message"])
+            
+            # Generate new response
+            new_response = generate_ai_response(
+                customer_query=ticket_data["plain_message"],
+                context=context
+            )
+            
+            # Store as pending
+            set_pending_confirmation(ticket_id, new_response)
+            
+            # Show new draft with buttons
+            safe_draft = sanitize_telegram_markdown(new_response[:500] + "..." if len(new_response) > 500 else new_response)
+            keyboard = create_ticket_keyboard(ticket_id, has_draft=True)
+            
+            bot.edit_message_text(
+                f"🤖 New AI Draft for `{ticket_id}`:\n\n{safe_draft}",
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=keyboard
+            )
+        except Exception as e:
+            bot.answer_callback_query(call.id, f"❌ Error: {str(e)[:50]}")
+    
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('edit:'))
+    def callback_edit(call):
+        """Handle edit button click - prompts user to send edit instructions"""
+        ticket_id = call.data.split(':')[1]
+        pending_edits[call.message.chat.id] = ticket_id
+        
+        bot.answer_callback_query(call.id, "✏️ Send your edit instructions")
+        bot.send_message(
+            call.message.chat.id,
+            f"✏️ Editing draft for ticket `{ticket_id}`\n\n"
+            f"Send your changes or instructions (e.g., 'make it more friendly' or 'add info about refund policy'):\n\n"
+            f"Or send /cancel to cancel editing."
+        )
+    
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('reply:'))
+    def callback_reply(call):
+        """Handle reply button click - prompts user to send custom reply"""
+        ticket_id = call.data.split(':')[1]
+        pending_replies[call.message.chat.id] = ticket_id
+        
+        bot.answer_callback_query(call.id, "📝 Send your reply")
+        bot.send_message(
+            call.message.chat.id,
+            f"📝 Writing custom reply for ticket `{ticket_id}`\n\n"
+            f"Send your response message:\n\n"
+            f"Or send /cancel to cancel."
+        )
+    
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('details:'))
+    def callback_details(call):
+        """Handle details button click"""
+        ticket_id = call.data.split(':')[1]
+        
+        try:
+            ticket = get_ticket(ticket_id)
+            if not ticket:
+                bot.answer_callback_query(call.id, "❌ Ticket not found")
+                return
+            
+            bot.answer_callback_query(call.id, "📋 Loading details...")
+            
+            # Format ticket details
+            message_preview = ticket["plain_message"][:500] + "..." if len(ticket["plain_message"]) > 500 else ticket["plain_message"]
+            
+            details = (
+                f"🎫 Ticket: `{ticket_id}`\n"
+                f"From: {ticket['from_email']}\n"
+                f"Subject: {ticket['subject']}\n"
+                f"Status: {ticket['status']}\n\n"
+                f"📩 Full Message:\n{message_preview}"
+            )
+            
+            bot.send_message(call.message.chat.id, details)
+        except Exception as e:
+            bot.answer_callback_query(call.id, f"❌ Error: {str(e)[:50]}")
+    
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('archive:'))
+    def callback_archive(call):
+        """Handle archive button click"""
+        ticket_id = call.data.split(':')[1]
+        
+        try:
+            update_ticket_status(ticket_id, "archived")
+            clear_pending_confirmation(ticket_id)
+            bot.answer_callback_query(call.id, "🗑️ Ticket archived")
+            bot.edit_message_text(
+                f"🗑️ Ticket `{ticket_id}` has been archived.",
+                call.message.chat.id,
+                call.message.message_id
+            )
+        except Exception as e:
+            bot.answer_callback_query(call.id, f"❌ Error: {str(e)[:50]}")
+    
+    # ============ MESSAGE HANDLERS ============
+    
+    @bot.message_handler(commands=['cancel'])
+    def handle_cancel(message):
+        """Cancel pending edit or reply"""
+        chat_id = message.chat.id
+        if chat_id in pending_edits:
+            del pending_edits[chat_id]
+            bot.reply_to(message, "✅ Edit cancelled")
+        elif chat_id in pending_replies:
+            del pending_replies[chat_id]
+            bot.reply_to(message, "✅ Reply cancelled")
+        else:
+            bot.reply_to(message, "Nothing to cancel")
+    
+    @bot.message_handler(func=lambda m: m.chat.id in pending_edits and not m.text.startswith('/'))
+    def handle_pending_edit(message):
+        """Handle edit instructions from user"""
+        chat_id = message.chat.id
+        ticket_id = pending_edits.pop(chat_id)
+        edit_instructions = message.text
+        
+        try:
+            ticket_data = get_ticket(ticket_id)
+            if not ticket_data:
+                bot.reply_to(message, f"❌ Ticket #{ticket_id} not found.")
+                return
+            
+            draft_response = get_pending_confirmation(ticket_id) or get_draft_response(ticket_id)
+            customer_email = ticket_data["from_email"]
+            
+            bot.send_message(chat_id, f"⏳ Processing your edits...")
+            
+            # Get RAG context
+            context = get_context_for_email(ticket_data["plain_message"])
+            
+            # Generate improved response with edit instructions
+            improved_response = generate_ai_response(
+                customer_query=ticket_data["plain_message"],
+                context=context,
+                draft_response=f"{draft_response}\n\nUser edits/instructions: {edit_instructions}"
+            )
+            
+            # Format the response
+            formatted_response = f"Dear Customer,\n\n{improved_response}\n\nThanks,\nThe StudyFate Team"
+            
+            # Send to customer
+            if send_response_email(customer_email, ticket_id, formatted_response):
+                save_ticket_response(ticket_id, formatted_response)
+                clear_pending_confirmation(ticket_id)
+                bot.send_message(chat_id, f"✅ Edited response sent for ticket `{ticket_id}`")
+            else:
+                bot.send_message(chat_id, f"❌ Failed to send email for ticket {ticket_id}")
+                
+        except Exception as e:
+            bot.reply_to(message, f"❌ Error: {str(e)}")
+    
+    @bot.message_handler(func=lambda m: m.chat.id in pending_replies and not m.text.startswith('/'))
+    def handle_pending_reply(message):
+        """Handle custom reply from user"""
+        chat_id = message.chat.id
+        ticket_id = pending_replies.pop(chat_id)
+        response_text = message.text
+        
+        try:
+            ticket_data = get_ticket(ticket_id)
+            if not ticket_data:
+                bot.reply_to(message, f"❌ Ticket #{ticket_id} not found.")
+                return
+            
+            customer_email = ticket_data["from_email"]
+            
+            # Format the response
+            formatted_response = f"Dear Customer,\n\n{response_text}\n\nThanks,\nThe StudyFate Team"
+            
+            # Send to customer
+            if send_response_email(customer_email, ticket_id, formatted_response):
+                save_ticket_response(ticket_id, formatted_response)
+                clear_pending_confirmation(ticket_id)
+                bot.send_message(chat_id, f"✅ Response sent for ticket `{ticket_id}`")
+            else:
+                bot.send_message(chat_id, f"❌ Failed to send email for ticket {ticket_id}")
+                
+        except Exception as e:
+            bot.reply_to(message, f"❌ Error: {str(e)}")
+
     @bot.message_handler(commands=['confirm'])
     def handle_confirm(message):
         """Confirm and send the AI-generated draft response"""
