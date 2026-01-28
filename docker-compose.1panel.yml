@@ -1,0 +1,32 @@
+# Docker Compose for 1Panel servers with existing MySQL
+# Uses MySQL from 1panel-network instead of creating a new container
+
+services:
+  email-support:
+    build: .
+    container_name: email-support-system
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override DB_HOST to connect to 1Panel's MySQL
+      # Common container names in 1Panel: mysql, 1panel-mysql, mysql-xxx
+      - DB_HOST=${DB_HOST:-mysql}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_NAME=${DB_NAME:-email_support}
+      - DB_USER=${DB_USER:-email_support}
+      - DB_PASSWORD=${DB_PASSWORD}
+    volumes:
+      # Mount knowledge base for persistent storage and easy updates
+      - ./knowledge_base:/app/knowledge_base
+      # Mount attachments directory for email attachments
+      - email_attachments:/tmp
+    networks:
+      - 1panel-network
+
+volumes:
+  email_attachments:
+
+networks:
+  1panel-network:
+    external: true
