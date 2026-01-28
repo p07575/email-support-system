@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  email-support:
+    build: .
+    container_name: email-support-system
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Mount knowledge base for persistent storage and easy updates
+      - ./knowledge_base:/app/knowledge_base
+      # Mount attachments directory for email attachments
+      - email_attachments:/tmp
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - email-support-network
+
+  mysql:
+    image: mysql:8.0
+    container_name: email-support-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-email_support}
+      MYSQL_USER: ${DB_USER:-email_support}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-email_support_pass}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./emailsys.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - email-support-network
+
+volumes:
+  mysql_data:
+  email_attachments:
+
+networks:
+  email-support-network:
+    driver: bridge
