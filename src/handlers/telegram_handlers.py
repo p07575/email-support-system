@@ -199,12 +199,36 @@ def register_handlers(bot: telebot.TeleBot):
         try:
             update_ticket_status(ticket_id, "archived")
             clear_pending_confirmation(ticket_id)
-            bot.answer_callback_query(call.id, "🗑️ Ticket archived")
+            bot.answer_callback_query(call.id, "� Ticket archived")
             bot.edit_message_text(
-                f"🗑️ Ticket `{ticket_id}` has been archived.",
+                f"📁 Ticket `{ticket_id}` has been archived.",
                 call.message.chat.id,
                 call.message.message_id
             )
+        except Exception as e:
+            bot.answer_callback_query(call.id, f"❌ Error: {str(e)[:50]}")
+    
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('delete:'))
+    def callback_delete(call):
+        """Handle delete button click - permanently deletes ticket and email"""
+        ticket_id = call.data.split(':')[1]
+        
+        try:
+            # Get ticket info before deleting
+            ticket_data = get_ticket(ticket_id)
+            
+            # Delete from database
+            from ..services.db_service import delete_ticket
+            if delete_ticket(ticket_id):
+                clear_pending_confirmation(ticket_id)
+                bot.answer_callback_query(call.id, "🗑️ Ticket deleted")
+                bot.edit_message_text(
+                    f"🗑️ Ticket `{ticket_id}` has been permanently deleted.",
+                    call.message.chat.id,
+                    call.message.message_id
+                )
+            else:
+                bot.answer_callback_query(call.id, "❌ Failed to delete ticket")
         except Exception as e:
             bot.answer_callback_query(call.id, f"❌ Error: {str(e)[:50]}")
     

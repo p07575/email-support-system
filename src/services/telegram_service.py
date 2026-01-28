@@ -53,7 +53,8 @@ def create_ticket_keyboard(ticket_id: str, has_draft: bool = False) -> types.Inl
         )
     
     keyboard.add(
-        types.InlineKeyboardButton("🗑️ Archive", callback_data=f"archive:{ticket_id}")
+        types.InlineKeyboardButton("� Archive", callback_data=f"archive:{ticket_id}"),
+        types.InlineKeyboardButton("🗑️ Delete", callback_data=f"delete:{ticket_id}")
     )
     
     return keyboard

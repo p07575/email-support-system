@@ -96,6 +96,37 @@ def update_ticket_status(ticket_id: str, status: str) -> bool:
             connection.close()
         return False
 
+def delete_ticket(ticket_id: str) -> bool:
+    """Permanently delete a ticket and all related data (responses, attachments, drafts)"""
+    try:
+        connection = get_connection()
+        cursor = connection.cursor()
+        
+        # Delete in order due to foreign key constraints
+        # Delete draft responses
+        cursor.execute("DELETE FROM draft_responses WHERE ticket_id = %s", (ticket_id,))
+        
+        # Delete responses
+        cursor.execute("DELETE FROM responses WHERE ticket_id = %s", (ticket_id,))
+        
+        # Delete attachments
+        cursor.execute("DELETE FROM attachments WHERE ticket_id = %s", (ticket_id,))
+        
+        # Delete the ticket itself
+        cursor.execute("DELETE FROM tickets WHERE id = %s", (ticket_id,))
+        
+        connection.commit()
+        cursor.close()
+        connection.close()
+        print(f"✅ Ticket {ticket_id} permanently deleted")
+        return True
+    except Exception as e:
+        print(f"Error deleting ticket: {e}")
+        if 'connection' in locals() and connection.is_connected():
+            connection.rollback()
+            connection.close()
+        return False
+
 def save_ticket_response(ticket_id: str, response_text: str) -> bool:
     """Save a response to a ticket"""
     try:
