@@ -68,10 +68,15 @@ def initialize_telegram():
     # Set bot commands for menu display
     bot.set_my_commands([
         telebot.types.BotCommand("/help", "Show available commands"),
-        telebot.types.BotCommand("/status", "Show current tickets in the queue"),
+        telebot.types.BotCommand("/status", "Show active tickets in queue"),
         telebot.types.BotCommand("/list", "List recent tickets"),
-        telebot.types.BotCommand("/ticket", "Show details of a specific ticket (usage: /ticket ticket_id)"),
-        telebot.types.BotCommand("/reply", "Reply to a ticket (usage: /reply ticket_id your_response)")
+        telebot.types.BotCommand("/ticket", "View ticket details - /ticket TKT-xxx"),
+        telebot.types.BotCommand("/reply", "Reply to ticket - /reply TKT-xxx message"),
+        telebot.types.BotCommand("/confirm", "Send AI draft - /confirm TKT-xxx"),
+        telebot.types.BotCommand("/edit", "Edit draft - /edit TKT-xxx changes"),
+        telebot.types.BotCommand("/regenerate", "Regenerate AI response - /regenerate TKT-xxx"),
+        telebot.types.BotCommand("/kb", "Knowledge base - /kb list|reload"),
+        telebot.types.BotCommand("/cancel", "Cancel pending edit/reply"),
     ])
     
     return bot
