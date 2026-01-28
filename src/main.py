@@ -14,7 +14,9 @@ from src.config.settings import (
     EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, EMAIL_USERNAME, EMAIL_PASSWORD,
     EMAIL_IMAP_SERVER, EMAIL_IMAP_PORT, EMAIL_CHECK_INTERVAL,
     OLLAMA_API_URL, OLLAMA_MODEL,
-    DB_HOST, DB_NAME
+    DB_HOST, DB_NAME,
+    AUTO_REPLY_ENABLED, AUTO_FILTER_ENABLED,
+    OPENROUTER_API_KEY, RAG_KNOWLEDGE_DIR
 )
 from src.models.ticket import Ticket
 from src.services.email_service import check_new_emails, send_email
@@ -23,14 +25,26 @@ from src.services.telegram_service import (
     initialize_telegram, 
     telegram_polling_loop, 
     forward_to_telegram,
+    forward_to_telegram_with_draft,
+    notify_filtered_email,
     set_running_state
 )
 from src.services.db_service import (
     initialize_db,
     ensure_db_schema,
     save_ticket,
-    update_ticket_status
+    update_ticket_status,
+    save_draft_response
 )
+from src.services.openrouter_service import test_openrouter_connection, generate_ai_response
+from src.services.email_classifier_service import (
+    classify_email,
+    is_spam_or_promotion,
+    needs_response,
+    format_classification_summary,
+    EmailCategory
+)
+from src.services.rag_service import initialize_rag, get_context_for_email
 from src.handlers.telegram_handlers import register_handlers
 
 # Global state
@@ -39,7 +53,7 @@ email_thread = None
 telegram_loop_thread = None
 
 def handle_new_email(from_email: str, subject: str, body: str, plain_body: str, attachments: List[Dict] = None) -> None:
-    """Handle a new email by creating a ticket and forwarding to Telegram"""
+    """Handle a new email by classifying, creating a ticket, and optionally auto-responding"""
     # Generate ticket ID
     ticket_id = f"TKT-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     
@@ -48,43 +62,77 @@ def handle_new_email(from_email: str, subject: str, body: str, plain_body: str, 
     print(f"From: {from_email}")
     print(f"Body length: {len(body)} characters")
     
-    # Detailed attachment debugging
+    # === STEP 1: Classify the email ===
+    if AUTO_FILTER_ENABLED:
+        print("\n📊 Classifying email...")
+        classification = classify_email(from_email, subject, plain_body)
+        print(format_classification_summary(classification))
+        
+        # Check if this is spam/promotion - auto-filter
+        if is_spam_or_promotion(classification):
+            print(f"🗑️ Email classified as {classification.category.value} - filtering out")
+            # Notify via Telegram about filtered email (optional)
+            notify_filtered_email(from_email, subject, classification)
+            print("="*50 + "\n")
+            return
+        
+        # Check if email needs response
+        if not needs_response(classification):
+            print(f"📁 Email classified as {classification.category.value} - archiving without response")
+            # Still save to database for records
+            save_ticket(ticket_id, from_email, subject, body, plain_body, attachments)
+            update_ticket_status(ticket_id, "archived")
+            print("="*50 + "\n")
+            return
+    
+    # === STEP 2: Log attachment info ===
     if attachments and len(attachments) > 0:
         print(f"📎 EMAIL HAS {len(attachments)} ATTACHMENT(S) 📎")
         for i, attachment in enumerate(attachments):
             print(f"  Attachment {i+1}: {attachment['filename']}")
             print(f"  Type: {attachment.get('content_type', 'unknown')}")
             print(f"  Size: {attachment.get('size', 0)} bytes")
-            print(f"  Path: {attachment.get('path', 'unknown')}")
-            
-            # Check if file actually exists
-            path = attachment.get('path', '')
-            if path and os.path.exists(path):
-                print(f"  File exists: ✅")
-                # Verify file size
-                actual_size = os.path.getsize(path)
-                print(f"  Disk size: {actual_size} bytes")
-            else:
-                print(f"  File exists: ❌")
-            print("  " + "-"*30)
     else:
-        print("❌ NO ATTACHMENTS DETECTED IN EMAIL")
-        print("This message was expected to have attachments (README.md)")
-        print("Check the email message structure and attachment detection logic")
+        print("📧 No attachments in email")
     
-    print("="*50 + "\n")
-    
-    # Create new ticket and save to database
+    # === STEP 3: Save ticket to database ===
     success = save_ticket(ticket_id, from_email, subject, body, plain_body, attachments)
     if not success:
         print(f"Failed to save ticket #{ticket_id} to database")
         return
     
-    # Send acknowledgment
+    # === STEP 4: Send acknowledgment ===
     send_acknowledgment(from_email, ticket_id)
     
-    # Forward to Telegram
-    forward_to_telegram(ticket_id, from_email, subject, plain_body, attachments)
+    # === STEP 5: Generate AI draft response if auto-reply enabled ===
+    draft_response = None
+    if AUTO_REPLY_ENABLED:
+        print("\n🤖 Generating AI draft response...")
+        
+        # Get RAG context
+        context = get_context_for_email(plain_body)
+        if context:
+            print(f"📚 Found relevant context from knowledge base ({len(context)} chars)")
+        else:
+            print("📚 No relevant context found in knowledge base")
+        
+        # Generate response using OpenRouter
+        draft_response = generate_ai_response(plain_body, context)
+        
+        if draft_response:
+            print(f"✅ Generated draft response ({len(draft_response)} chars)")
+            # Save draft to database
+            save_draft_response(ticket_id, draft_response)
+        else:
+            print("❌ Failed to generate draft response")
+    
+    # === STEP 6: Forward to Telegram with draft for confirmation ===
+    if AUTO_REPLY_ENABLED and draft_response:
+        forward_to_telegram_with_draft(ticket_id, from_email, subject, plain_body, draft_response, attachments)
+    else:
+        forward_to_telegram(ticket_id, from_email, subject, plain_body, attachments)
+    
+    print("="*50 + "\n")
 
 def send_acknowledgment(to_email: str, ticket_id: str) -> None:
     """Send an acknowledgment email to the customer"""
@@ -147,9 +195,10 @@ def main():
         print("="*50)
         print(f"IMAP Server: {EMAIL_IMAP_SERVER}:{EMAIL_IMAP_PORT}")
         print(f"SMTP Server: {EMAIL_SMTP_SERVER}:{EMAIL_SMTP_PORT}")
-        print(f"Ollama Host: {OLLAMA_API_URL}")
-        print(f"Ollama Model: {OLLAMA_MODEL}")
         print(f"Database: MySQL at {DB_HOST}/{DB_NAME}")
+        print(f"Auto-Reply: {'✅ Enabled' if AUTO_REPLY_ENABLED else '❌ Disabled'}")
+        print(f"Auto-Filter: {'✅ Enabled' if AUTO_FILTER_ENABLED else '❌ Disabled'}")
+        print(f"Knowledge Base: {RAG_KNOWLEDGE_DIR}")
         print("="*50 + "\n")
         
         # Initialize and test database connection
@@ -164,10 +213,22 @@ def main():
             print("Failed to validate database schema. Exiting.")
             return
         
-        # Test Ollama connection before starting
+        # Initialize RAG service
+        print("Initializing RAG service...")
+        initialize_rag()
+        
+        # Test OpenRouter connection
+        if OPENROUTER_API_KEY:
+            openrouter_available = test_openrouter_connection()
+            if not openrouter_available:
+                print("Warning: OpenRouter connection failed - using fallback responses")
+        else:
+            print("Warning: OpenRouter API key not set - AI features limited")
+        
+        # Test Ollama connection (fallback)
         ollama_available = test_ollama_connection()
         if not ollama_available:
-            print("Warning: Ollama connection failed - responses will not be AI-processed")
+            print("Note: Ollama not available (OpenRouter will be used instead)")
         
         print("Starting background tasks...")
         

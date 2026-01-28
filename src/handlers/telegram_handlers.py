@@ -3,14 +3,174 @@ import os
 from datetime import datetime
 from typing import Dict, List
 from ..models.ticket import Ticket
-from ..services.telegram_service import safe_telegram_send, sanitize_telegram_markdown, send_file_via_telegram
+from ..services.telegram_service import (
+    safe_telegram_send, 
+    sanitize_telegram_markdown, 
+    send_file_via_telegram,
+    get_pending_confirmation,
+    clear_pending_confirmation
+)
 from ..services.ollama_service import process_with_deepseek
+from ..services.openrouter_service import generate_ai_response
+from ..services.rag_service import get_context_for_email
 from ..services.email_service import send_response_email
-from ..services.db_service import save_ticket_response, update_ticket_status, get_ticket, get_recent_tickets, get_all_tickets, get_ticket_attachments
+from ..services.db_service import (
+    save_ticket_response, 
+    update_ticket_status, 
+    get_ticket, 
+    get_recent_tickets, 
+    get_all_tickets, 
+    get_ticket_attachments,
+    get_draft_response
+)
 
 def register_handlers(bot: telebot.TeleBot):
     """Register all Telegram command handlers"""
     
+    @bot.message_handler(commands=['confirm'])
+    def handle_confirm(message):
+        """Confirm and send the AI-generated draft response"""
+        try:
+            command_parts = message.text.split(' ', 1)
+            if len(command_parts) < 2:
+                bot.reply_to(message, "❌ Usage: /confirm ticket_id")
+                return
+                
+            ticket_id = command_parts[1].strip()
+            
+            # Get the pending draft
+            draft_response = get_pending_confirmation(ticket_id)
+            
+            # If not in memory, try to get from database
+            if not draft_response:
+                draft_response = get_draft_response(ticket_id)
+            
+            if not draft_response:
+                bot.reply_to(message, f"❌ No pending draft found for ticket #{ticket_id}. Use /reply instead.")
+                return
+            
+            # Get ticket from database
+            ticket_data = get_ticket(ticket_id)
+            if not ticket_data:
+                bot.reply_to(message, f"❌ Ticket #{ticket_id} not found.")
+                return
+            
+            customer_email = ticket_data["from_email"]
+            
+            # Format the response with greeting and signature
+            formatted_response = f"Dear Customer,\n\n{draft_response}\n\nThanks,\nThe StudyFate Team"
+            
+            # Send to customer
+            bot.send_message(message.chat.id, f"⏳ Sending confirmed response to {customer_email}...")
+            
+            if send_response_email(customer_email, ticket_id, formatted_response):
+                save_ticket_response(ticket_id, formatted_response)
+                clear_pending_confirmation(ticket_id)
+                bot.send_message(message.chat.id, f"✅ Response sent successfully for ticket #{ticket_id}")
+            else:
+                bot.send_message(message.chat.id, f"❌ Failed to send email for ticket #{ticket_id}")
+                
+        except Exception as e:
+            bot.reply_to(message, f"❌ Error: {str(e)}")
+    
+    @bot.message_handler(commands=['edit'])
+    def handle_edit(message):
+        """Edit the AI draft and send"""
+        try:
+            command_parts = message.text.split(' ', 2)
+            if len(command_parts) < 3:
+                bot.reply_to(message, "❌ Usage: /edit ticket_id your_edits_or_instructions")
+                return
+                
+            ticket_id = command_parts[1].strip()
+            edit_instructions = command_parts[2]
+            
+            # Get ticket from database
+            ticket_data = get_ticket(ticket_id)
+            if not ticket_data:
+                bot.reply_to(message, f"❌ Ticket #{ticket_id} not found.")
+                return
+            
+            # Get the original draft
+            draft_response = get_pending_confirmation(ticket_id)
+            if not draft_response:
+                draft_response = get_draft_response(ticket_id)
+            
+            customer_email = ticket_data["from_email"]
+            
+            bot.send_message(message.chat.id, f"⏳ Processing your edits...")
+            
+            # Get RAG context
+            context = get_context_for_email(ticket_data["plain_message"])
+            
+            # Generate improved response with edit instructions
+            improved_response = generate_ai_response(
+                customer_query=ticket_data["plain_message"],
+                context=context,
+                draft_response=f"{draft_response}\n\nUser edits/instructions: {edit_instructions}"
+            )
+            
+            # Format the response
+            formatted_response = f"Dear Customer,\n\n{improved_response}\n\nThanks,\nThe StudyFate Team"
+            
+            # Show the edited response
+            bot.send_message(message.chat.id, f"📝 Edited response:\n\n{formatted_response[:1000]}...")
+            
+            # Send to customer
+            if send_response_email(customer_email, ticket_id, formatted_response):
+                save_ticket_response(ticket_id, formatted_response)
+                clear_pending_confirmation(ticket_id)
+                bot.send_message(message.chat.id, f"✅ Edited response sent for ticket #{ticket_id}")
+            else:
+                bot.send_message(message.chat.id, f"❌ Failed to send email for ticket #{ticket_id}")
+                
+        except Exception as e:
+            bot.reply_to(message, f"❌ Error: {str(e)}")
+    
+    @bot.message_handler(commands=['regenerate'])
+    def handle_regenerate(message):
+        """Regenerate AI response for a ticket"""
+        try:
+            command_parts = message.text.split(' ', 1)
+            if len(command_parts) < 2:
+                bot.reply_to(message, "❌ Usage: /regenerate ticket_id")
+                return
+                
+            ticket_id = command_parts[1].strip()
+            
+            # Get ticket from database
+            ticket_data = get_ticket(ticket_id)
+            if not ticket_data:
+                bot.reply_to(message, f"❌ Ticket #{ticket_id} not found.")
+                return
+            
+            bot.send_message(message.chat.id, f"⏳ Regenerating AI response...")
+            
+            # Get RAG context
+            context = get_context_for_email(ticket_data["plain_message"])
+            
+            # Generate new response
+            new_response = generate_ai_response(
+                customer_query=ticket_data["plain_message"],
+                context=context
+            )
+            
+            # Store as pending
+            from ..services.telegram_service import set_pending_confirmation
+            set_pending_confirmation(ticket_id, new_response)
+            
+            # Show the new response
+            safe_response = sanitize_telegram_markdown(new_response[:800])
+            bot.send_message(
+                message.chat.id, 
+                f"🤖 New AI Draft for #{ticket_id}:\n\n{safe_response}\n\n"
+                f"/confirm {ticket_id} - Send this\n"
+                f"/edit {ticket_id} changes - Edit and send"
+            )
+                
+        except Exception as e:
+            bot.reply_to(message, f"❌ Error: {str(e)}")
+
     @bot.message_handler(commands=['reply'])
     def handle_reply(message):
         try:
@@ -96,14 +256,21 @@ def register_handlers(bot: telebot.TeleBot):
     def handle_help(message):
         help_text = (
             "📧 Email Support Bot 📧\n\n"
-            "This bot helps you handle customer support emails.\n\n"
-            "Commands:\n"
-            "/reply ticket_id your_response - Reply to a customer ticket\n"
-            "/status - Show current tickets in the queue (excluding responded tickets)\n"
-            "/list - List all recent tickets\n"
-            "/ticket ticket_id - Show details of a specific ticket\n"
+            "This bot helps you handle customer support emails with AI assistance.\n\n"
+            "🤖 AI Auto-Reply Commands:\n"
+            "/confirm ticket_id - Send the AI-generated draft\n"
+            "/edit ticket_id changes - Edit draft and send\n"
+            "/regenerate ticket_id - Generate a new AI response\n\n"
+            "📝 Manual Commands:\n"
+            "/reply ticket_id your_response - Write custom response\n"
+            "/status - Show active tickets\n"
+            "/list - List recent tickets\n"
+            "/ticket ticket_id - Show ticket details\n"
             "/help - Show this help message\n\n"
-            "ℹ️ You can also send file attachments in your replies. Simply send the files to this chat before using the /reply command."
+            "📚 Knowledge Base:\n"
+            "/kb list - List knowledge base documents\n"
+            "/kb add - Instructions to add documents\n\n"
+            "ℹ️ AI drafts are generated automatically when new emails arrive."
         )
         safe_telegram_send(message.chat.id, help_text)
 
@@ -272,6 +439,48 @@ def register_handlers(bot: telebot.TeleBot):
             
         except Exception as e:
             bot.reply_to(message, f"❌ Error fetching ticket: {str(e)}")
+    
+    @bot.message_handler(commands=['kb'])
+    def handle_knowledge_base(message):
+        """Handle knowledge base commands"""
+        try:
+            from ..services.rag_service import get_rag_service
+            
+            command_parts = message.text.split(' ', 1)
+            sub_command = command_parts[1].strip() if len(command_parts) > 1 else "list"
+            
+            rag = get_rag_service()
+            
+            if sub_command == "list":
+                documents = rag.list_documents()
+                if documents:
+                    doc_list = "\n".join([f"📄 {doc}" for doc in documents])
+                    bot.reply_to(message, f"📚 Knowledge Base Documents:\n\n{doc_list}")
+                else:
+                    bot.reply_to(message, "📚 No documents in knowledge base yet.\nUse /kb add for instructions.")
+                    
+            elif sub_command == "add":
+                kb_path = rag.knowledge_dir
+                bot.reply_to(
+                    message,
+                    f"📚 Adding Documents to Knowledge Base\n\n"
+                    f"Place your documents in:\n{kb_path}\n\n"
+                    f"Supported formats:\n"
+                    f"- .txt (Plain text)\n"
+                    f"- .md (Markdown)\n"
+                    f"- .json (JSON data)\n\n"
+                    f"The system will automatically load them on restart."
+                )
+                
+            elif sub_command == "reload":
+                count = rag.load_documents()
+                bot.reply_to(message, f"✅ Reloaded {count} documents from knowledge base.")
+                
+            else:
+                bot.reply_to(message, "Usage:\n/kb list - List documents\n/kb add - How to add documents\n/kb reload - Reload documents")
+                
+        except Exception as e:
+            bot.reply_to(message, f"❌ Error: {str(e)}")
             
     # Handle document uploads (for attachments)
     @bot.message_handler(content_types=['document'])

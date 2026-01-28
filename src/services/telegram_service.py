@@ -10,6 +10,25 @@ from ..services.db_service import update_ticket_status
 bot = None
 running = True  # Default value
 
+# Store pending confirmations: {ticket_id: draft_response}
+pending_confirmations: Dict[str, str] = {}
+
+
+def get_pending_confirmation(ticket_id: str) -> Optional[str]:
+    """Get pending draft response for a ticket"""
+    return pending_confirmations.get(ticket_id)
+
+
+def set_pending_confirmation(ticket_id: str, draft: str):
+    """Set pending draft response for a ticket"""
+    pending_confirmations[ticket_id] = draft
+
+
+def clear_pending_confirmation(ticket_id: str):
+    """Clear pending confirmation for a ticket"""
+    if ticket_id in pending_confirmations:
+        del pending_confirmations[ticket_id]
+
 def initialize_telegram():
     """Initialize the Telegram bot"""
     global bot
@@ -227,6 +246,95 @@ def forward_to_telegram(ticket_id: str, from_email: str, subject: str, message: 
         # Print traceback for more detailed error information
         import traceback
         traceback.print_exc()
+
+
+def forward_to_telegram_with_draft(ticket_id: str, from_email: str, subject: str, message: str, draft_response: str, attachments: List[Dict] = None) -> None:
+    """Forward a new ticket to Telegram with AI-generated draft response for confirmation"""
+    global bot
+    
+    # Ensure the bot is initialized
+    if bot is None:
+        initialize_telegram()
+    
+    # Store the draft for later confirmation
+    set_pending_confirmation(ticket_id, draft_response)
+    
+    # Create a shortened message preview (first 200 chars)
+    message_preview = message[:200] + "..." if len(message) > 200 else message
+    
+    # Sanitize all text fields for Telegram
+    safe_from_email = sanitize_telegram_markdown(from_email)
+    safe_subject = sanitize_telegram_markdown(subject)
+    safe_message_preview = sanitize_telegram_markdown(message_preview)
+    safe_draft = sanitize_telegram_markdown(draft_response[:500] + "..." if len(draft_response) > 500 else draft_response)
+    
+    print(f"Forwarding ticket #{ticket_id} to Telegram with draft response")
+    
+    # Add attachment info if any
+    attachment_info = ""
+    if attachments and len(attachments) > 0:
+        attachment_info = f"\n📎 Attachments: {len(attachments)}\n"
+        for attachment in attachments:
+            attachment_name = attachment.get('filename', 'Unknown')
+            attachment_info += f"- {attachment_name}\n"
+    
+    # Message with draft and confirmation options
+    telegram_message = (
+        f"🆕 New Support Request (AI Draft Ready)\n"
+        f"Ticket ID: #{ticket_id}\n"
+        f"From: {safe_from_email}\n"
+        f"Subject: {safe_subject}\n\n"
+        f"📩 Customer Message:\n{safe_message_preview}\n"
+        f"{attachment_info}\n"
+        f"🤖 AI Draft Response:\n{safe_draft}\n\n"
+        f"Actions:\n"
+        f"/confirm {ticket_id} - Send this draft response\n"
+        f"/edit {ticket_id} your_changes - Edit and send\n"
+        f"/reply {ticket_id} custom_response - Write your own response"
+    )
+    
+    try:
+        safe_telegram_send(TELEGRAM_CHAT_ID, telegram_message)
+        update_ticket_status(ticket_id, "pending_confirmation")
+        print(f"✅ Forwarded ticket #{ticket_id} with draft to Telegram")
+        
+        # Send attachments if any
+        if attachments and len(attachments) > 0:
+            for attachment in attachments:
+                file_path = attachment.get('path')
+                if file_path and os.path.exists(file_path):
+                    caption = f"#{ticket_id} - {attachment['filename']}"
+                    send_file_via_telegram(TELEGRAM_CHAT_ID, file_path, caption)
+    except Exception as e:
+        print(f"❌ Error forwarding to Telegram: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def notify_filtered_email(from_email: str, subject: str, classification) -> None:
+    """Notify about a filtered (spam/promotion) email"""
+    global bot
+    
+    # Ensure the bot is initialized
+    if bot is None:
+        initialize_telegram()
+    
+    safe_from_email = sanitize_telegram_markdown(from_email)
+    safe_subject = sanitize_telegram_markdown(subject[:100])
+    
+    message = (
+        f"🗑️ Email Filtered\n"
+        f"From: {safe_from_email}\n"
+        f"Subject: {safe_subject}\n"
+        f"Category: {classification.category.value}\n"
+        f"Confidence: {classification.confidence:.0%}\n"
+        f"Reason: {classification.reason}"
+    )
+    
+    try:
+        safe_telegram_send(TELEGRAM_CHAT_ID, message)
+    except Exception as e:
+        print(f"Error notifying about filtered email: {e}")
 
 def telegram_polling_loop():
     """Main Telegram polling loop"""

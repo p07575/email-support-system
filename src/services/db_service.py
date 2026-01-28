@@ -394,4 +394,85 @@ def get_ticket_attachments(ticket_id: str) -> List[Dict]:
         print(f"Error getting attachments: {e}")
         if 'connection' in locals() and connection.is_connected():
             connection.close()
-        return [] 
+        return []
+
+
+def save_draft_response(ticket_id: str, draft_text: str) -> bool:
+    """Save a draft AI response for a ticket"""
+    try:
+        connection = get_connection()
+        cursor = connection.cursor()
+        
+        # Check if drafts table exists, create if not
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS drafts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                ticket_id VARCHAR(30) NOT NULL UNIQUE,
+                draft_text LONGTEXT NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+            )
+        """)
+        
+        # Insert or update draft
+        query = """
+            INSERT INTO drafts (ticket_id, draft_text) 
+            VALUES (%s, %s)
+            ON DUPLICATE KEY UPDATE draft_text = %s, updated_at = CURRENT_TIMESTAMP
+        """
+        cursor.execute(query, (ticket_id, draft_text, draft_text))
+        
+        connection.commit()
+        cursor.close()
+        connection.close()
+        print(f"✅ Saved draft response for ticket #{ticket_id}")
+        return True
+    except Exception as e:
+        print(f"❌ Error saving draft response: {e}")
+        if 'connection' in locals() and connection.is_connected():
+            connection.close()
+        return False
+
+
+def get_draft_response(ticket_id: str) -> Optional[str]:
+    """Get the draft AI response for a ticket"""
+    try:
+        connection = get_connection()
+        cursor = connection.cursor(dictionary=True)
+        
+        query = "SELECT draft_text FROM drafts WHERE ticket_id = %s"
+        cursor.execute(query, (ticket_id,))
+        result = cursor.fetchone()
+        
+        cursor.close()
+        connection.close()
+        
+        if result:
+            return result['draft_text']
+        return None
+    except Exception as e:
+        print(f"Error getting draft response: {e}")
+        if 'connection' in locals() and connection.is_connected():
+            connection.close()
+        return None
+
+
+def delete_draft_response(ticket_id: str) -> bool:
+    """Delete the draft response for a ticket after it's been sent"""
+    try:
+        connection = get_connection()
+        cursor = connection.cursor()
+        
+        query = "DELETE FROM drafts WHERE ticket_id = %s"
+        cursor.execute(query, (ticket_id,))
+        
+        connection.commit()
+        cursor.close()
+        connection.close()
+        return True
+    except Exception as e:
+        print(f"Error deleting draft response: {e}")
+        if 'connection' in locals() and connection.is_connected():
+            connection.close()
+        return False 
