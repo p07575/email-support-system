@@ -1,5 +1,7 @@
 # 📧 AI Email Support System
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/p07575/email-support-system)
+
 An intelligent email support system with AI-powered auto-replies, smart email filtering, and Telegram integration.
 
 ## ✨ Features
